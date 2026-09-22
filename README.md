@@ -11,7 +11,24 @@ Invoke with `/generate-ppt-from-design`.
 
 Bundled with the skill: the reusable `bslib.py` build engine, a `GOTCHAS.md` of hard-won PowerPoint/OOXML traps, a reviewer-agent prompt template, and helper scripts for rendering/diffing/validating.
 
-## Installing a skill
+## Quick install (easiest — no technical skills needed)
+
+Open **Claude Code** and paste:
+
+> Install the `generate-ppt-from-design` skill from https://github.com/sdettweiler/claude_skills — clone it, copy the skill into my `~/.claude/skills/`, then run its `setup.sh` to install any missing dependencies.
+
+Claude clones the repo, installs the skill, and runs `setup.sh` to install the Python + system tools that are missing. Then start a **new** session and run `/generate-ppt-from-design`.
+
+Two things can't be automated (Claude will flag them): running **`/design-login`** once, and installing the deck's font. If Homebrew isn't already on the machine, its installer needs your Mac password once — Claude will hand you that one line to paste.
+
+### Or install the deps yourself
+```bash
+git clone https://github.com/sdettweiler/claude_skills.git
+cp -R claude_skills/.claude/skills/generate-ppt-from-design ~/.claude/skills/
+bash claude_skills/setup.sh      # installs missing deps (Homebrew asks for your password once)
+```
+
+## Installing a skill (manually)
 
 **Per-user (all your projects):**
 ```bash
