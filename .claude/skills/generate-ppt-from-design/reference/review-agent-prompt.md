@@ -21,6 +21,7 @@ Read BOTH images for EVERY slide (use the Read tool on the image paths). Do not 
 
 ## Do NOT flag (caveats)
 - Font **glyph shape / kerning / sub-pixel width** differences — the render uses a fallback font (the design's paid font isn't embedded). Only flag text differences that are **structural**: wrong wording, clearly wrong font size, wrong weight (bold vs regular), wrong color, or a different **line-break count**.
+- **Semibold/Demi (600) weight looks heavier and ~6–12% wider in the LibreOffice render than in PowerPoint/the GT** — this is a LibreOffice quirk, not a build error. Do NOT flag 600-weight text as "too bold" or as slightly overflowing/tight in its pill/box on that basis. Only flag a weight if it is clearly the WRONG tier (e.g. bold 700 where the GT is clearly regular 400, or vice-versa). If unsure whether a weight is wrong, say "verify `typeface=` in the slide XML" rather than asserting it's too bold.
 - Position differences ≤ ~5 slide-px.
 - The following INTENTIONAL deviations from the original: <LIST — e.g. "slide 4 nodes intentionally in one line", "slide 17 headline says 'be'", "slide 18 rows intentionally aligned">.
 

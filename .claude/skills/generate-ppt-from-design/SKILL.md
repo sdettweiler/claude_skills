@@ -34,18 +34,22 @@ Then confirm the plan with a short task list and proceed. Do **not** wait for fu
 
 ### Phase 2 — Extract exact assets (byte-exact, never re-encode)
 - Pull every image/SVG/font referenced by the design. **Do not** hand-reproduce base64 — it corrupts (padding errors, broken PNGs). Decode byte-exact from the design payload / tool-results and validate each with PIL (`Image.open().verify()`).
+- **Never hand-copy inline base64** into a file — the model re-emitting a long base64 string corrupts it (broken PNG). `get_file` auto-persists LARGE binaries to a tool-results `.txt` (decode that, byte-exact). For SMALL binaries and when the share link needs auth, open the design in the user's authenticated Chrome, read an `<img>.src` to get the signed `…claudeusercontent.com/…/serve/<path>?t=<token>` URL, and `curl` each asset straight to disk (the signed token works without cookies). Validate each with `PIL.Image.open().load()`. See GOTCHAS #21.
 - If an org DLP policy blocks byte extraction from the browser, ask the user to drop the assets in a folder — respect the policy, don't circumvent it.
 - Note the fonts. If the design uses a **paid font** (e.g. Avenir Next LT Pro), you cannot embed it (licensing). The deck will render correctly only where that font is installed (it usually is on the author's Mac). Keep the TTFs locally **only for measuring text width** during build (see line-breaks in GOTCHAS).
 
 ### Phase 3 — Render ground-truth (GT) screenshots
 - Build a self-contained HTML harness that renders each slide/section at the deck size, and screenshot each at **2× device scale** (`--force-device-scale-factor=2`) with headless Chrome → one PNG per slide (`gt/slide-01.png` …). These are your source of truth for the review loop.
+- **Load the design's real fonts in the harness** — `<link>` its `colors_and_type.css` (or replicate its `@font-face`) and put the `.ttf`s where that CSS points. Without this the browser cannot render font-weight **600/300** (they're separate installed families) and silently synthesises them, so your GT is wrong for every semibold element. See GOTCHAS #16.
 - Alternatively screenshot the live design if reachable. GT PNGs should be 2× the slide px (e.g. 2560×1440).
 
 ### Phase 4 — Build the native PPTX
 - Copy `reference/bslib.py` into your build dir — it's the reusable engine (units, colors, rect/oval/line/polygon, text with exact spacing + pre-wrapping, gradients, shadows, glows, rounded-corner masks, SVG embed/rasterize, picture cover-crop, logo rows). **Read its docstrings.**
 - Write a `build.py` with one function per slide (`s01(prs)…sNN(prs)`), using `bslib`. Match every element: position, size, color, font size/weight, letter-spacing, line-height, gradients, shadows, rounded corners, images.
 - **Units**: `1 px = 9525 EMU`, `1 px = 0.75 pt`. Deck 1280×720 px → 13.333"×7.5".
-- **Text is the hard part** — see GOTCHAS "Line breaks" and "Text spacing". Pre-wrap every multi-line text box at its *true container width* so breaks match the original.
+- **Font weight ≠ bold flag.** Read each element's `font-weight` from the design HTML and use `bslib.run(text, size, color, w=<weight>)` for EVERY run so 600 → the Demi family (not synthetic bold), 700 → bold, 400/300 → their families. Verify installed family names with fontTools first and set `DECK_FONT_DEMI`/`DECK_FONT_LIGHT`. This is the single most common fidelity miss — see GOTCHAS #15.
+- **Text is the hard part** — see GOTCHAS "Line breaks" and "Text spacing". Pre-wrap every multi-line text box at its *true container width* so breaks match the original; for `text-wrap: pretty` emit **explicit per-line paragraphs** read off the GT (#20). Keep single-line labels `word_wrap=False` (#18).
+- **Don't derive box heights/positions from CSS math alone** — sample the GT PNG for anything sized/positioned (card/bar/pill heights, panel top/left) and for semi-transparent overlay colors (#19).
 - Attach speaker notes from the design if present.
 
 ### Phase 5 — Render the PPTX and compare

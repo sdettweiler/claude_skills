@@ -93,3 +93,57 @@ Bake confirmed changes into `build.py` with a `# user manual edit` comment. `aut
 - Tell the reviewer to **ignore font glyph/kerning** diffs and only flag structural ones — otherwise the fallback font generates endless false positives.
 - Re-run the reviewer after fixes; fixing one slide can shift another. Stop when no High/Med findings remain.
 - Keep a list of **intentional deviations** (things the user asked to differ from the original) and pass it to the reviewer so it doesn't re-flag them.
+
+## 15. Font WEIGHT is not a bold flag — it's a family (the single biggest fidelity trap)
+Designs use numeric weights (300/400/500/600/700). A run's `font.bold=True/False` only gives you **700 or 400** — so every `font-weight: 600` (semibold/Demi) element comes out either too heavy (if you used bold) or too light (if you didn't). This was the #1 correction on a real deck ("you use bold where the original uses semi-bold/demi").
+**Why:** commercial families like Avenir Next LT Pro ship each weight as a **separate installed family name**, not as a weight axis of one family. Verify with fontTools before building:
+```python
+from fontTools.ttLib import TTFont
+for f in ttfs:  # nameID 1 = family, 2 = subfamily
+    n=TTFont(f)['name']; print(n.getName(1,3,1,0x409), '/', n.getName(2,3,1,0x409))
+```
+Typical Avenir Next LT Pro result:
+- 400 → family `Avenir Next LT Pro`, style Regular  → run: `font="Avenir Next LT Pro", bold=False`
+- 700 → family `Avenir Next LT Pro`, style Bold     → run: `font="Avenir Next LT Pro", bold=True`
+- **600 → family `Avenir Next LT Pro Demi`, style Regular → run: `font="Avenir Next LT Pro Demi", bold=False`**
+- 300 → family `Avenir Next LT Pro Light`
+**Fix:** build a `run(text, size, color, w=<weight>)` helper that maps weight→(family_name, bold) and use it for EVERY text run. Read the exact `font-weight` of each element straight from the design HTML/CSS; don't eyeball it. (Eyebrows/headlines/card-titles are usually 700; taglines, kicker labels, "Q3 2026"-style pills, uppercase meta labels are usually 600.)
+
+## 16. Ground-truth must load the design's real @font-face (or GT is wrong for 600/300)
+If your GT harness only sets `font-family: "Avenir Next LT Pro"` and relies on the installed font, the browser **cannot find weight 600 in that family** (600 is a different installed family) and **fakes/synthesises** it — so your ground truth itself is wrong for every semibold element, and you'll "match" the wrong thing. **Fix:** in the harness, link the design's own `colors_and_type.css` (its `@font-face` rules map each weight to the correct `.ttf`) and copy the `.ttf`s to where that CSS expects them (`./fonts/…`). Then Chrome renders 600→Demi exactly like the live design.
+
+## 17. LibreOffice renders the Demi/semibold family WIDER and HEAVIER than PowerPoint/Chrome
+Your LO preview is unreliable specifically for 600-weight text: LO makes it noticeably heavier and ~6–12% wider than the real font. Consequences and fixes:
+- A snug single-line Demi label/pill that is correct in PowerPoint will **overflow or wrap in the LO preview**. Don't chase it by fattening the box (that makes PowerPoint too loose). Instead **verify the run's `typeface=` in the slide XML** (`unzip -p deck.pptx ppt/slides/slideN.xml`) to confirm the correct family is set — that's the deliverable's truth, not the LO raster.
+- The reviewer (which reads LO output) will flag Demi text as "too bold / wrong width." Pre-empt it: tell the reviewer the deck targets PowerPoint and to ignore weight/width differences on semibold text, OR sanity-check its weight findings against the XML before acting.
+- Give measured-width pills a small (~6%) safety margin so the LO preview doesn't overflow, but keep it small so PowerPoint stays snug.
+
+## 18. Single-line labels: turn word-wrap OFF
+Any label meant to be one line (kickers, card titles, taglines, pills, step text) must have `text_frame.word_wrap = False`. Otherwise a renderer that measures the string a few px wider (see #17) silently wraps it to two lines and blows up the layout. Only multi-line text (headlines, body paragraphs, card body) should wrap — and those you pre-wrap yourself (#3). A good default: wrap OFF unless you passed an explicit `wrap_px`.
+
+## 19. Measure geometry and colours from the GT pixels — don't trust CSS math alone
+Deriving box heights/positions purely from CSS flexbox + line-height estimates drifts (real leading ≠ your guess). For anything the user calls "too short/too tall/too low," **sample the GT PNG** to get the truth, then divide by the GT scale (2×):
+```python
+# bounding box of a colour region, and a point colour
+def bbox(px,W,H,pred,region): ...   # min/max x,y where pred(r,g,b)
+```
+Use it to read card heights, bar heights, pill heights, panel top/left, and CTA-bar top/bottom. On one deck this corrected: card height 112→137, orange info-box 90→108, CTA bar 112→150 sitting 40px too low.
+For **semi-transparent overlays** (`rgba(...,a)` over a background) don't hand-compute the blend — **sample the rendered pixel** in the GT (e.g. slide-4 chip fill `#171B44`, chip border `#8B4A22`, an outline pill's border). Note a translucent border over a photo has no single colour (it varies with the image underneath) — pick a representative mid value.
+
+## 20. Match line breaks exactly for `text-wrap: pretty`
+Designs often set `text-wrap: pretty`/`balance`, which pulls a word down to avoid a short last line — your greedy word-wrap won't reproduce it and the user WILL notice ("check the line breaks"). For visible paragraphs/headlines, read the exact breaks off the GT and emit them as **explicit one-line paragraphs** rather than relying on `wrap_px`. (To extract breaks programmatically, render the harness and wrap each word in a `<span>`, then group by `getBoundingClientRect().top`.)
+
+## 22. Stacked multi-line text: use valign='m' centered on GT-measured line centers
+Placing each line in its own box with `valign='t'` (glyph pinned to box top) is renderer-dependent: PowerPoint pulls the glyph up relative to LibreOffice, so line 2 ends up hugging line 1 (user: "the second line sits right under the headline"). **Fix:** give each line its own box, `valign='m'` (middle), with the box's vertical CENTER placed exactly on the line's GT-measured center. That pins the glyph center to a known y in every renderer. Measure the centers off the GT with a **tight** per-line color band — a loose band catches the previous line's descenders/anti-alias and reports the center too high (this bit once: "sub" read 589 with a wide band, 607 with a tight one). Don't assume flex `gap`/`margin-top:auto` translate to even spacing — measure what the design actually renders.
+
+## 23. OOXML shadows render more concentrated than CSS box-shadow
+A literal port of `box-shadow: 0 10px 30px rgba(...,0.07)` (blur=30, dist=10, alpha=0.07) comes out noticeably darker/tighter in LibreOffice/PowerPoint than in the browser — enough to show as a grey band in a tight gap (e.g. between cards and a bar below them). To match the browser's soft, near-invisible shadow, **increase the blur and drop the opacity** (e.g. blur≈45–50, alpha≈0.04–0.05). Verify by sampling the GT pixel in the gap (should be within ~1–2% of the base background) and matching it.
+
+## 24. Draw masked/"knockout" overlays NATIVELY, never rasterize them
+Decorative SVGs that use a background-colored rect to knock a gap into another line (e.g. an orange connector "jumping" a border, dashed-gap masks) must be drawn with native shapes (`line`/`oval`/`rect`), NOT rasterized. Rasterizing+downscaling anti-aliases the knockout rect's edges into a grey fringe, and a "same as background" mask rect stops being invisible the moment it sits over a shadow/gradient (it erases the shading and reads as a bright box with grey borders — a real user complaint). Native vector shapes have crisp edges and no fringe. Cleanest of all: if the only goal is a line crossing another line, just draw the crossing line ON TOP (correct z-order) and skip the mask entirely. Keep rasterizing SVGs that are pure vector-over-flat-color with no knockouts (logos, clean paths).
+
+## 25. Preserve user manual edits: diff the delivered PPTX, bake exact values
+Users nudge shapes in PowerPoint between rounds ("I moved the screenshot, check the new position"). Read the delivered file with python-pptx, dump every shape's `left/top/width/height` in px (`/9525`), diff against your build's computed values, and bake the changed ones back into `build.py` as literals with a `# user-set` comment. Don't re-derive them from CSS — the user's value wins.
+
+## 21. Byte-exact asset extraction when the share link needs auth
+`get_file` (DesignSync MCP) auto-persists LARGE binaries to a tool-results `.txt` (byte-exact, decode with `base64` — reliable). SMALL binaries come back inline; do NOT hand-copy that base64 into a file — the model re-emitting a long base64 string corrupts it ("broken PNG / bad IDAT"). Instead: open the design in the **user's authenticated Chrome** (claude-in-chrome), read an `<img>.src` — assets are served from `https://<projectId>.claudeusercontent.com/v1/design/projects/<id>/serve/<path>?t=<signed-token>`. That signed URL is fetchable with **plain `curl` (no cookies)** → pipe straight to disk, byte-exact, no context cost. `curl "<BASE>/serve/<path>?t=<TOK>" -o deck/<path>` for every asset (grab the token once; it's shared across assets). SVGs return as text and can be written directly. Validate every file with `PIL.Image.open().load()` (use `.load()`, not just `.verify()` — verify passes on some streams that fail to decode).

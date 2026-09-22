@@ -20,7 +20,27 @@ DECK = os.path.join(BUILD, "deck")
 CACHE = os.path.join(BUILD, "_raster")
 os.makedirs(CACHE, exist_ok=True)
 RSVG = os.environ.get("RSVG_BIN", "/opt/homebrew/bin/rsvg-convert")
-FONT = os.environ.get("DECK_FONT", "Avenir Next LT Pro")   # font family name written into text runs; set per design
+FONT = os.environ.get("DECK_FONT", "Avenir Next LT Pro")   # 400/700 family name written into text runs; set per design
+
+# ---- WEIGHT -> (family name, bold) ---------------------------------------
+# CRITICAL: font.bold gives you ONLY 700 or 400. Commercial families (e.g.
+# Avenir Next LT Pro) ship each weight as a SEPARATE installed family, so
+# font-weight:600 (Demi/semibold) is NOT the bold flag — it's a different
+# family name. Verify the installed family/subfamily names with fontTools and
+# set DECK_FONT_DEMI / DECK_FONT_LIGHT per design. See GOTCHAS #15/#16/#17.
+FONT_DEMI  = os.environ.get("DECK_FONT_DEMI",  FONT + " Demi")
+FONT_LIGHT = os.environ.get("DECK_FONT_LIGHT", FONT + " Light")
+def weight_font(w):
+    """Map a CSS numeric weight to (family_name, bold_flag)."""
+    if w >= 700: return FONT, True
+    if w >= 600: return FONT_DEMI, False
+    if w <= 300: return FONT_LIGHT, False
+    return FONT, False
+def run(t, size, color='ink', w=400, italic=False, ls=0.0):
+    """Build a text run dict with the correct family+bold for weight `w`.
+    Use this for EVERY run so 600 maps to the Demi family, not synthetic bold."""
+    fam, bold = weight_font(w)
+    return dict(t=t, size=size, color=color, font=fam, bold=bold, italic=italic, ls=ls, w=w)
 
 def E(px):  return Emu(int(round(px * EMU_PX)))
 def P(px):  return Pt(px * 0.75)          # css px -> pt
@@ -51,7 +71,9 @@ def measure(txt, size_px, weight=400, ls=0.0, italic=False):
 
 import re as _re2
 def _run_w(t, r):
-    return measure(t, r.get('size',17), 700 if r.get('bold') else 400, r.get('ls',0), r.get('italic',False))
+    w = r.get('w')
+    if w is None: w = 700 if r.get('bold') else 400   # weight for width measurement
+    return measure(t, r.get('size',17), w, r.get('ls',0), r.get('italic',False))
 
 def wrap_runs(runs, width):
     """Greedy word-wrap a list of styled runs to `width` px using the real font
@@ -292,7 +314,10 @@ def _set_spacing(rpr, em, font_px):
         rpr.set('spc', str(spc))
 
 def text(slide, x, y, w, h, spans, align='l', valign='t', line_h=None,
-         wrap=True, autosize=False, wrap_px=None):
+         wrap=False, autosize=False, wrap_px=None):
+    # wrap defaults to False: single-line labels must NOT auto-wrap (a renderer
+    # measuring the string a few px wider silently breaks them to 2 lines — see
+    # GOTCHAS #18). Multi-line text passes wrap_px (pre-wrapped) or wrap=True.
     """spans: list of paragraphs; each paragraph = list of run dicts
        run = {t, size(px), color, bold, italic, font, ls(em), color..}
        OR spans can be a single list of runs (one paragraph).
