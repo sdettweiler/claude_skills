@@ -11,6 +11,13 @@ Invoke with `/generate-ppt-from-design`.
 
 Bundled with the skill: the reusable `bslib.py` build engine, a `GOTCHAS.md` of hard-won PowerPoint/OOXML traps, a reviewer-agent prompt template, and helper scripts for rendering/diffing/validating.
 
+### `remove-ai-slop`
+Scan a piece of text for AI writing tells (word choice, structure, punctuation, tone), report what it found with quoted examples, then rewrite it to read like a person wrote it. Facts stay as they were. Based on Wikipedia's "Signs of AI writing" guide.
+
+Invoke with `/remove-AI-slop`, or ask Claude to "humanize this" / "check if this sounds AI-written".
+
+Bundled with the skill: `references/tells.md` (the full taxonomy the scan checks against) and `references/system-prompt.md`, a drop-in system prompt / CLAUDE.md block that stops the tells at the source.
+
 ## Quick install (easiest — no technical skills needed)
 
 Open **Claude Code** and paste:
