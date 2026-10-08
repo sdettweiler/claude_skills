@@ -2,6 +2,8 @@
 
 Spawn a `general-purpose` subagent per review pass with a prompt built from this template. Fill in the two paths and the intentional-deviations list. Run it synchronously and act on its report.
 
+> For animated decks, review against the **final build state** GT (the fully-revealed slide). This reviewer checks only static pixel fidelity; animation playback is verified separately by the user's slideshow (Phase 6b), so don't ask it to assess motion.
+
 ---
 
 You are a meticulous pixel-perfect design reviewer. Compare a rebuilt PowerPoint deck (rendered to PNGs) against the ORIGINAL design screenshots, slide by slide, and produce a precise, actionable, severity-ranked deviation report.

@@ -8,7 +8,9 @@ trigger: /generate-ppt-from-design
 
 Rebuild a Claude design as a **native, editable PowerPoint deck** (real shapes, text, gradients, images — not screenshots-on-slides) that matches the original pixel-for-pixel, then verify it with automated review loops until it's perfect.
 
-This skill is the distilled playbook from a full end-to-end build. **Read `reference/GOTCHAS.md` before writing any PPTX code** — it lists the non-obvious bugs that will otherwise cost you hours (PowerPoint-vs-LibreOffice divergence, gradient/geometry corruption, font/line-break mismatch, etc.). The reusable engine is `reference/bslib.py`.
+This skill is the distilled playbook from a full end-to-end build. **Read `reference/GOTCHAS.md` before writing any PPTX code** — it lists the non-obvious bugs that will otherwise cost you hours (PowerPoint-vs-LibreOffice divergence, gradient/geometry corruption, font/line-break mismatch, etc.). The reusable engines are `reference/bslib.py` (static shapes/text) and `reference/animlib.py` (native PowerPoint animations).
+
+**Animations.** If the design moves — build/reveal steps (`data-build`/`data-builds`), fades, fly-ins, scale/pops, motion, continuous loops (`@keyframes`) — those come across as **real, editable PowerPoint animations** (click-sequenced entrances + looping emphasis), not video or GIF. `reference/animlib.py` writes the `<p:timing>` OOXML (python-pptx has no animation API); it is validated in PowerPoint. See **Phase 6b** and GOTCHAS #26–30.
 
 ## Step 0 — Ask for the design link and confirm scope
 
@@ -16,14 +18,16 @@ Ask the user (use the project's preferred question mechanism):
 1. **The Claude design link** (e.g. `https://claude.ai/design/…` or a design project ID + file path).
 2. Output location for the `.pptx` (default: current working dir).
 3. Fidelity bar: "pixel-perfect" (default — full review loop) vs "close enough" (single pass).
+4. **Animations:** if the design moves, should the motion be reproduced as native PowerPoint animations? (default: yes when the design has `data-build`/`@keyframes`/transitions — see Phase 6b).
 
 Then confirm the plan with a short task list and proceed. Do **not** wait for further approval between phases — the user asked for autonomous iteration until perfect.
 
-## Workflow (7 phases)
+## Workflow
 
 ```
-1 Import design  →  2 Extract assets  →  3 Ground-truth screenshots
-      →  4 Build native PPTX  →  5 Render + compare  →  6 Auto-review loop  →  7 Validate + deliver
+1 Import design (+ detect animations)  →  2 Extract assets  →  3 Ground-truth screenshots (per build state)
+   →  4 Build native PPTX  →  5 Render + compare  →  6 Auto-review loop
+   →  6b Reproduce animations natively (if any)  →  7 Validate + deliver
 ```
 
 ### Phase 1 — Import the design
@@ -31,6 +35,7 @@ Then confirm the plan with a short task list and proceed. Do **not** wait for fu
 - `get_file` caps at ~192KB of source per call and auto-saves large results to a tool-results `.txt`. For multi-file designs, pull each file.
 - Save everything under a working dir, e.g. `build/deck/` (HTML, CSS, JS, `assets/`, fonts).
 - Determine the slide size from the design (a web deck is usually **1280×720 px**). Record it — all geometry math depends on it.
+- **Detect animations** (do this now so Phase 3 captures the right states). Grep the HTML/CSS/JS for: `data-build` / `data-builds` (step reveals — the current build is set as an attribute on the slide/stage, elements tagged `.b1/.b2/.b3`/`.x1…` reveal per step), `@keyframes` + `animation:` (loops, e.g. a pulsing dot), `transition:` + `transform:` (what moves/scales/fades on a step), and `IntersectionObserver`/scroll reveals. Make a per-slide inventory: for each moving element — which build step triggers it, the kind of motion (fade/fly/scale/move/color/loop), direction, and duration. This inventory drives Phase 6b.
 
 ### Phase 2 — Extract exact assets (byte-exact, never re-encode)
 - Pull every image/SVG/font referenced by the design. **Do not** hand-reproduce base64 — it corrupts (padding errors, broken PNGs). Decode byte-exact from the design payload / tool-results and validate each with PIL (`Image.open().verify()`).
@@ -42,6 +47,7 @@ Then confirm the plan with a short task list and proceed. Do **not** wait for fu
 - Build a self-contained HTML harness that renders each slide/section at the deck size, and screenshot each at **2× device scale** (`--force-device-scale-factor=2`) with headless Chrome → one PNG per slide (`gt/slide-01.png` …). These are your source of truth for the review loop.
 - **Load the design's real fonts in the harness** — `<link>` its `colors_and_type.css` (or replicate its `@font-face`) and put the `.ttf`s where that CSS points. Without this the browser cannot render font-weight **600/300** (they're separate installed families) and silently synthesises them, so your GT is wrong for every semibold element. See GOTCHAS #16.
 - Alternatively screenshot the live design if reachable. GT PNGs should be 2× the slide px (e.g. 2560×1440).
+- **Per build state (animated decks):** when a slide has `data-builds=N`, capture a GT screenshot at EACH state (set the stage's `data-build` attribute to `0,1,2,…` in the harness and screenshot each) → `gt/slide-07.b0.png`, `.b1.png`, … The *final* state is the pixel-perfect target you rebuild in Phase 4; the earlier states tell you exactly which elements appear/move at each step and their start vs end positions — the raw material for the Phase 6b animation mapping.
 
 ### Phase 4 — Build the native PPTX
 - Copy `reference/bslib.py` into your build dir — it's the reusable engine (units, colors, rect/oval/line/polygon, text with exact spacing + pre-wrapping, gradients, shadows, glows, rounded-corner masks, SVG embed/rasterize, picture cover-crop, logo rows). **Read its docstrings.**
@@ -66,11 +72,28 @@ Loop until clean:
 - The reviewer MUST be told to ignore font-glyph/kerning/sub-pixel differences (fallback font in LibreOffice) and only flag **structural** text differences (wrong wording, clearly wrong size/weight/color, different line-break count). Otherwise it drowns you in false positives.
 - Explicitly instruct it to check **bottom-whitespace**: content that ends too high vs the original (a recurring issue), and to say whether to move the block down, add spacing, or enlarge proportionally.
 
+### Phase 6b — Reproduce animations natively (only if the design moves)
+Do this AFTER the static deck is pixel-perfect (every element you'll animate must already exist as a shape). Use `reference/animlib.py` — it writes the slide's `<p:timing>` OOXML (python-pptx has no animation API) and is validated in PowerPoint.
+
+1. **Prove the engine first.** Run `reference/anim_selftest.py` to produce `ANIMATION-TEST.pptx`, hand it to the user, and have them run it as a slideshow. This is the ONE thing you cannot verify yourself (see step 4). Only proceed once they confirm it opens with no repair prompt and plays (both dots pulse continuously from open; clicks 1–4 reveal the boxes). Doing this before you animate a full deck saves you from authoring N slides of broken timing.
+2. **Map the Phase-1 inventory to effects.** For each slide, group the moving elements by **build step** (step 1 = first click, etc.) and call once per slide:
+   ```python
+   import animlib as AN
+   AN.animate(slide,
+       clicks=[ [AN.eff(shp, 'fade')],                    # click 1: these appear/move
+                [AN.eff(shp2,'fly', dir='u'), AN.eff(shp3,'fade', trig='with')] ],  # click 2: two together
+       autos =[ AN.eff(dot, 'pulse', dur=700, loop=True) ])   # on-load loops (e.g. @keyframes)
+   ```
+   Effect kinds: entrances `fade/appear/fly(dir)/zoom/wipe`; emphasis/loops `pulse/grow/spin`; `motion` (dx,dy px) for an element that slides A→B on a step; `colorfade` for a color change (see creativity rule). `trig`: `'click'` (new step) / `'with'` (with previous) / `'after'`. Match `dur` to the CSS transition/animation duration.
+3. **Reproduce EVERYTHING that moves, creatively** — the bar is pixel-perfect-as-in-Claude. If a web effect has no 1:1 preset, build it from parts: a **color change on click** = duplicate the shape in the new colour on top, hidden, and `colorfade` it in; a **number counting up** = stack the values and cross-fade/step them; a **custom path** = `motion` with the measured dx/dy; **staggered** reveals = multiple `eff(..., trig='with', delay=ms)` in one step. There is always a native way — don't drop an animation.
+4. **Verification is user-side.** LibreOffice cannot play/prove `<p:timing>`, and a static render can't show motion. After building, deliver the deck and ask the user to run the slideshow and confirm each slide's builds + loops. Fix the engine/mapping from their report (they'll tell you "pulse only runs during clicks", "box N late", etc. — each maps to a known `<p:timing>` structure fix in GOTCHAS #26–30).
+
 ### Phase 7 — Validate the file, then deliver
 Before handing over, **validate the OOXML** (PowerPoint is far stricter than LibreOffice — a file that renders in LibreOffice can still be "defective" in PowerPoint):
 - Every `ppt/slides/slideN.xml` is well-formed.
 - Every `<a:custGeom>` wraps its `<a:path>` in `<a:pathLst>` (a stray `<a:path>` corrupts the file — see GOTCHAS).
 - No gradient shape falls back to theme `accent1` (blue) — colored `srgbClr` stops present, not `schemeClr` in the gradFill (see GOTCHAS).
+- **Animated decks:** each animated `slideN.xml` has a well-formed `<p:timing>`; every entrance target has a matching `<p:bldP>` in `<p:bldLst>`; loops carry `repeatCount="indefinite"` on the behavior `cTn`; on-load loops sit in the mainSeq's first group with `<p:cond delay="0">` (not as a sibling of `<p:seq>`). Re-open with python-pptx (it ignores timing but proves the package is valid). A LibreOffice `--convert-to pdf` that doesn't error is a weak structural check only — real validity is the user's PowerPoint slideshow (Phase 6b step 4).
 - Re-open with python-pptx as a smoke test.
 Then copy to the delivery path and report. Link the file with a clickable markdown path.
 
@@ -89,4 +112,8 @@ Users will hand-edit the delivered `.pptx` in PowerPoint between rounds and expe
 - Native, editable shapes/text throughout (no flattened screenshots of the whole slide).
 - Opens in PowerPoint with **no repair prompt**.
 - Reviewer returns no High/Med deviations against the GT.
+- **If the design moves: every animation is reproduced as a native PowerPoint animation** (click-sequenced entrances + looping emphasis), not video/GIF — builds advance in the right order and continuous loops run continuously. Confirmed by the user's slideshow.
 - User's manual edits preserved across rebuilds.
+
+## Environment / dependencies (animation)
+`reference/animlib.py` needs only `python-pptx` + `lxml` (both already required). No extra install for animations.
